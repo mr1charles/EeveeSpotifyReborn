@@ -1,81 +1,215 @@
 
-name: Download Spotify IPA
+name: Create IPA Packages
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+    inputs:
+      ipa_url:
+        description: "URL to the decrypted IPA file (direct link or Google Drive share link)"
+        default: ""
+        required: true
+        type: string
+      tweak_url:
+        description: "URL to the EeveeSpotify tweak file (direct link or Google Drive share link)"
+        default: ""
+        required: true
+        type: string
+
+env:
+  SWIFTPROTOBUF_VERSION: "1.29.0"
 
 jobs:
-  download-ipa:
+  build:
     runs-on: macos-latest
+    env:
+      THEOS: ${{ github.workspace }}/theos
 
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: maxim-lobanov/setup-xcode@v1
         with:
-          python-version: "3.x"
+          xcode-version: latest-stable
 
-      - name: Install download dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install gdown
+      - name: Hide Sensitive Inputs
+        uses: levibostian/action-hide-sensitive-inputs@v1
 
-      - name: Download Spotify IPA
+      - name: Install gdown
+        run: python3 -m pip install --break-system-packages gdown
+
+      - name: Download and Validate IPA
         shell: bash
         env:
-          SPOTIFY_URL: https://drive.google.com/file/d/1nidA45MYDcSugU--181Pss9ySxukkOAj/view?usp=sharing
+          IPA_URL: ${{ inputs.ipa_url }}
         run: |
           set -euo pipefail
+          OUTPUT="$GITHUB_WORKSPACE/spotify.ipa"
 
-          OUTPUT="$GITHUB_WORKSPACE/Spotify.ipa"
-
-          if [[ "$SPOTIFY_URL" =~ /file/d/([^/?]+) ]]; then
-            FILE_ID="${BASH_REMATCH[1]}"
-          elif [[ "$SPOTIFY_URL" =~ [\?\&]id=([^&]+) ]]; then
-            FILE_ID="${BASH_REMATCH[1]}"
+          if [[ "$IPA_URL" == *drive.google.com* ]]; then
+            FILE_ID=$(python3 -c '
+          import sys
+          from urllib.parse import urlparse, parse_qs
+          u = urlparse(sys.argv[1])
+          parts = u.path.split("/")
+          fid = ""
+          if "d" in parts:
+              i = parts.index("d")
+              if i + 1 < len(parts):
+                  fid = parts[i + 1]
+          if not fid:
+              fid = parse_qs(u.query).get("id", [""])[0]
+          if not fid:
+              raise SystemExit("Could not extract Google Drive file ID")
+          print(fid)
+          ' "$IPA_URL")
+            gdown "$FILE_ID" -O "$OUTPUT"
           else
-            echo "::error::Could not extract Google Drive file ID"
-            exit 1
+            curl -fL --retry 3 "$IPA_URL" -o "$OUTPUT"
           fi
-
-          echo "Downloading IPA from Google Drive..."
-          gdown "$FILE_ID" --output "$OUTPUT"
 
           if [[ ! -s "$OUTPUT" ]]; then
-            echo "::error::The downloaded IPA is missing or empty"
+            echo "::error::IPA download is empty or missing."
             exit 1
           fi
 
-          echo "IPA downloaded successfully."
+          FILE_TYPE=$(file --mime-type -b "$OUTPUT")
+          if [[ "$FILE_TYPE" != "application/x-ios-app" && "$FILE_TYPE" != "application/zip" && "$FILE_TYPE" != "application/octet-stream" ]]; then
+            echo "::error::Unexpected IPA file type: $FILE_TYPE"
+            exit 1
+          fi
 
-      - name: Validate IPA
+          if ! unzip -tq "$OUTPUT" >/dev/null; then
+            echo "::error::Downloaded IPA is not a valid ZIP archive."
+            exit 1
+          fi
+
+          if ! unzip -Z1 "$OUTPUT" | grep -Eq '^Payload/[^/]+\.app/'; then
+            echo "::error::IPA archive does not contain Payload/*.app."
+            exit 1
+          fi
+
+          echo "IPA download and validation passed."
+
+      - name: Download and Validate Tweak
         shell: bash
+        env:
+          TWEAK_URL: ${{ inputs.tweak_url }}
+        run: |
+          set -euo pipefail
+          OUTPUT="$GITHUB_WORKSPACE/eeveespotify.deb"
+
+          if [[ "$TWEAK_URL" == *drive.google.com* ]]; then
+            FILE_ID=$(python3 -c '
+          import sys
+          from urllib.parse import urlparse, parse_qs
+          u = urlparse(sys.argv[1])
+          parts = u.path.split("/")
+          fid = ""
+          if "d" in parts:
+              i = parts.index("d")
+              if i + 1 < len(parts):
+                  fid = parts[i + 1]
+          if not fid:
+              fid = parse_qs(u.query).get("id", [""])[0]
+          if not fid:
+              raise SystemExit("Could not extract Google Drive file ID")
+          print(fid)
+          ' "$TWEAK_URL")
+            gdown "$FILE_ID" -O "$OUTPUT"
+          else
+            curl -fL --retry 3 "$TWEAK_URL" -o "$OUTPUT"
+          fi
+
+          if [[ ! -s "$OUTPUT" ]]; then
+            echo "::error::Tweak download is empty or missing."
+            exit 1
+          fi
+
+          FILE_TYPE=$(file --mime-type -b "$OUTPUT")
+          if [[ "$FILE_TYPE" != "application/vnd.debian.binary-package" && "$FILE_TYPE" != "application/x-debian-package" ]]; then
+            echo "::error::Unexpected DEB file type: $FILE_TYPE"
+            exit 1
+          fi
+
+          if ! ar t "$OUTPUT" >/dev/null 2>&1; then
+            echo "::error::Downloaded tweak is not a valid Debian package."
+            exit 1
+          fi
+
+          echo "Tweak download and validation passed."
+
+      - name: Download SwiftProtobuf
         run: |
           set -euo pipefail
 
-          IPA="$GITHUB_WORKSPACE/Spotify.ipa"
+          curl -fL --retry 3 \
+            "https://github.com/whoeevee/swift-protobuf/releases/download/${SWIFTPROTOBUF_VERSION}/org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm.deb" \
+            -o "org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm.deb"
 
-          if ! unzip -tq "$IPA" >/dev/null; then
-            echo "::error::The downloaded file is not a valid ZIP/IPA archive"
-            exit 1
-          fi
+          curl -fL --retry 3 \
+            "https://github.com/whoeevee/swift-protobuf/releases/download/${SWIFTPROTOBUF_VERSION}/org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm64.deb" \
+            -o "org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm64.deb"
 
-          if ! unzip -Z1 "$IPA" | grep -Eq '^Payload/[^/]+\.app/'; then
-            echo "::error::The archive does not contain a Payload/*.app directory"
-            exit 1
-          fi
+          echo "SWIFTPROTOBUF_ROOTFUL=org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm.deb" >> "$GITHUB_ENV"
+          echo "SWIFTPROTOBUF_ROOTLESS=org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm64.deb" >> "$GITHUB_ENV"
 
-          echo "IPA archive validation passed."
+      - name: Download OpenSpotifySafariExtension
+        run: |
+          set -euo pipefail
+          git clone https://github.com/BillyCurtis/OpenSpotifySafariExtension
+          echo "OPENSPOTIFYSAFARIEXTENSION=OpenSpotifySafariExtension/OpenSpotifySafariExtension.appex" >> "$GITHUB_ENV"
 
-      - name: Upload IPA artifact
-        uses: actions/upload-artifact@v4
+      - name: Setup insert-dylib
+        run: |
+          set -euo pipefail
+          git clone https://github.com/Tyilo/insert_dylib.git
+          xcrun clang -x c -arch arm64 ./insert_dylib/insert_dylib/main.c -I/usr/include/ -o insert-dylib
+          sudo mv insert-dylib /usr/local/bin/
+          sudo chmod +x /usr/local/bin/insert-dylib
+
+      - name: Setup ivinject
+        run: |
+          set -euo pipefail
+          git clone https://github.com/whoeevee/ivinject.git
+          mkdir -p "$HOME/.ivinject"
+          cp -R ./ivinject/KnownFrameworks/. "$HOME/.ivinject/"
+          curl -fL --retry 3 \
+            https://github.com/whoeevee/ivinject/releases/download/first/ivinject-arm64 \
+            -o ivinject-arm64
+          sudo mv ivinject-arm64 /usr/local/bin/
+          sudo chmod +x /usr/local/bin/ivinject-arm64
+
+      - name: Setup ipapatch
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 \
+            https://github.com/asdfzxcvbn/ipapatch/releases/download/v2.1.0/ipapatch.macos-arm64 \
+            -o ipapatch.macos-arm64
+          sudo mv ipapatch.macos-arm64 /usr/local/bin/ipapatch
+          sudo chmod +x /usr/local/bin/ipapatch
+
+      - name: Create EeveeSpotify Package
+        run: |
+          set -euo pipefail
+          ivinject-arm64 "$GITHUB_WORKSPACE/spotify.ipa" "$GITHUB_WORKSPACE/EeveeSpotify.ipa" \
+            -i "$GITHUB_WORKSPACE/eeveespotify.deb" "$SWIFTPROTOBUF_ROOTFUL" "$OPENSPOTIFYSAFARIEXTENSION" \
+            -s - -d --level Optimal
+
+      - name: Create Patched Package
+        run: |
+          set -euo pipefail
+          ipapatch -input "$GITHUB_WORKSPACE/EeveeSpotify.ipa" -output "$GITHUB_WORKSPACE/EeveeSpotify-patched.ipa"
+
+      - name: Upload to GitHub Releases
+        uses: softprops/action-gh-release@v2.0.1
         with:
-          name: Spotify-IPA
-          path: Spotify.ipa
-          if-no-files-found: error
-          retention-days: 7
+          tag_name: eevee-${{ github.run_number }}
+          name: EeveeSpotify (${{ github.run_number }})
+          files: |
+            EeveeSpotify.ipa
+            EeveeSpotify-patched.ipa
+          draft: true
+
+      - name: Output Release URL
+        run: |
+          echo "::notice::Release available at: https://github.com/${{ github.repository }}/releases"
