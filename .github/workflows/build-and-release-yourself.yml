@@ -1,5 +1,6 @@
+from pathlib import Path
 
-name: Create IPA Packages
+content = r'''name: Create IPA Packages
 
 on:
   workflow_dispatch:
@@ -10,7 +11,7 @@ on:
         required: true
         type: string
       tweak_url:
-        description: "URL to the EeveeSpotify tweak file (direct link or Google Drive share link)"
+        description: "URL to the EeveeSpotify tweak DEB file (direct link or Google Drive share link)"
         default: ""
         required: true
         type: string
@@ -25,16 +26,18 @@ jobs:
       THEOS: ${{ github.workspace }}/theos
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
 
-      - uses: maxim-lobanov/setup-xcode@v1
+      - name: Set up Xcode
+        uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: latest-stable
 
       - name: Hide Sensitive Inputs
         uses: levibostian/action-hide-sensitive-inputs@v1
 
-      - name: Install gdown
+      - name: Install download tools
         run: python3 -m pip install --break-system-packages gdown
 
       - name: Download and Validate IPA
@@ -46,25 +49,9 @@ jobs:
           OUTPUT="$GITHUB_WORKSPACE/spotify.ipa"
 
           if [[ "$IPA_URL" == *drive.google.com* ]]; then
-            FILE_ID=$(python3 -c '
-          import sys
-          from urllib.parse import urlparse, parse_qs
-          u = urlparse(sys.argv[1])
-          parts = u.path.split("/")
-          fid = ""
-          if "d" in parts:
-              i = parts.index("d")
-              if i + 1 < len(parts):
-                  fid = parts[i + 1]
-          if not fid:
-              fid = parse_qs(u.query).get("id", [""])[0]
-          if not fid:
-              raise SystemExit("Could not extract Google Drive file ID")
-          print(fid)
-          ' "$IPA_URL")
-            gdown "$FILE_ID" -O "$OUTPUT"
+            gdown --fuzzy "$IPA_URL" -O "$OUTPUT"
           else
-            curl -fL --retry 3 "$IPA_URL" -o "$OUTPUT"
+            curl --fail --location --show-error --retry 3 "$IPA_URL" -o "$OUTPUT"
           fi
 
           if [[ ! -s "$OUTPUT" ]]; then
@@ -72,19 +59,21 @@ jobs:
             exit 1
           fi
 
-          FILE_TYPE=$(file --mime-type -b "$OUTPUT")
-          if [[ "$FILE_TYPE" != "application/x-ios-app" && "$FILE_TYPE" != "application/zip" && "$FILE_TYPE" != "application/octet-stream" ]]; then
-            echo "::error::Unexpected IPA file type: $FILE_TYPE"
+          FILE_TYPE="$(file --mime-type -b "$OUTPUT" || true)"
+          if [[ "$FILE_TYPE" == "text/html" || "$FILE_TYPE" == "application/xhtml+xml" ]]; then
+            echo "::error::The URL returned an HTML webpage instead of an IPA. Make sure the file is publicly accessible and use a direct download or valid Google Drive share link."
+            head -c 300 "$OUTPUT" || true
+            echo
             exit 1
           fi
 
-          if ! unzip -tq "$OUTPUT" >/dev/null; then
-            echo "::error::Downloaded IPA is not a valid ZIP archive."
+          if ! unzip -tq "$OUTPUT" >/dev/null 2>&1; then
+            echo "::error::The downloaded file is not a valid ZIP/IPA archive (detected type: $FILE_TYPE). Check the URL and sharing permissions."
             exit 1
           fi
 
           if ! unzip -Z1 "$OUTPUT" | grep -Eq '^Payload/[^/]+\.app/'; then
-            echo "::error::IPA archive does not contain Payload/*.app."
+            echo "::error::The archive does not contain Payload/*.app and does not appear to be a valid iOS IPA."
             exit 1
           fi
 
@@ -99,25 +88,9 @@ jobs:
           OUTPUT="$GITHUB_WORKSPACE/eeveespotify.deb"
 
           if [[ "$TWEAK_URL" == *drive.google.com* ]]; then
-            FILE_ID=$(python3 -c '
-          import sys
-          from urllib.parse import urlparse, parse_qs
-          u = urlparse(sys.argv[1])
-          parts = u.path.split("/")
-          fid = ""
-          if "d" in parts:
-              i = parts.index("d")
-              if i + 1 < len(parts):
-                  fid = parts[i + 1]
-          if not fid:
-              fid = parse_qs(u.query).get("id", [""])[0]
-          if not fid:
-              raise SystemExit("Could not extract Google Drive file ID")
-          print(fid)
-          ' "$TWEAK_URL")
-            gdown "$FILE_ID" -O "$OUTPUT"
+            gdown --fuzzy "$TWEAK_URL" -O "$OUTPUT"
           else
-            curl -fL --retry 3 "$TWEAK_URL" -o "$OUTPUT"
+            curl --fail --location --show-error --retry 3 "$TWEAK_URL" -o "$OUTPUT"
           fi
 
           if [[ ! -s "$OUTPUT" ]]; then
@@ -125,28 +98,29 @@ jobs:
             exit 1
           fi
 
-          FILE_TYPE=$(file --mime-type -b "$OUTPUT")
-          if [[ "$FILE_TYPE" != "application/vnd.debian.binary-package" && "$FILE_TYPE" != "application/x-debian-package" ]]; then
-            echo "::error::Unexpected DEB file type: $FILE_TYPE"
+          FILE_TYPE="$(file --mime-type -b "$OUTPUT" || true)"
+          if [[ "$FILE_TYPE" == "text/html" || "$FILE_TYPE" == "application/xhtml+xml" ]]; then
+            echo "::error::The tweak URL returned HTML instead of a DEB package. Check the link and sharing permissions."
+            head -c 300 "$OUTPUT" || true
+            echo
             exit 1
           fi
 
           if ! ar t "$OUTPUT" >/dev/null 2>&1; then
-            echo "::error::Downloaded tweak is not a valid Debian package."
+            echo "::error::The downloaded tweak is not a valid Debian package (detected type: $FILE_TYPE)."
             exit 1
           fi
 
           echo "Tweak download and validation passed."
 
-      - name: Download SwiftProtobuf
+      - name: Download SwiftProtobuf packages
+        shell: bash
         run: |
           set -euo pipefail
-
-          curl -fL --retry 3 \
+          curl --fail --location --show-error --retry 3 \
             "https://github.com/whoeevee/swift-protobuf/releases/download/${SWIFTPROTOBUF_VERSION}/org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm.deb" \
             -o "org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm.deb"
-
-          curl -fL --retry 3 \
+          curl --fail --location --show-error --retry 3 \
             "https://github.com/whoeevee/swift-protobuf/releases/download/${SWIFTPROTOBUF_VERSION}/org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm64.deb" \
             -o "org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm64.deb"
 
@@ -154,51 +128,67 @@ jobs:
           echo "SWIFTPROTOBUF_ROOTLESS=org.swift.protobuf.swiftprotobuf_${SWIFTPROTOBUF_VERSION}_iphoneos-arm64.deb" >> "$GITHUB_ENV"
 
       - name: Download OpenSpotifySafariExtension
+        shell: bash
         run: |
           set -euo pipefail
-          git clone https://github.com/BillyCurtis/OpenSpotifySafariExtension
+          git clone --depth 1 https://github.com/BillyCurtis/OpenSpotifySafariExtension
           echo "OPENSPOTIFYSAFARIEXTENSION=OpenSpotifySafariExtension/OpenSpotifySafariExtension.appex" >> "$GITHUB_ENV"
 
-      - name: Setup insert-dylib
+      - name: Set up insert-dylib
+        shell: bash
         run: |
           set -euo pipefail
-          git clone https://github.com/Tyilo/insert_dylib.git
+          git clone --depth 1 https://github.com/Tyilo/insert_dylib.git
           xcrun clang -x c -arch arm64 ./insert_dylib/insert_dylib/main.c -I/usr/include/ -o insert-dylib
-          sudo mv insert-dylib /usr/local/bin/
+          sudo mv insert-dylib /usr/local/bin/insert-dylib
           sudo chmod +x /usr/local/bin/insert-dylib
 
-      - name: Setup ivinject
+      - name: Set up ivinject
+        shell: bash
         run: |
           set -euo pipefail
-          git clone https://github.com/whoeevee/ivinject.git
+          git clone --depth 1 https://github.com/whoeevee/ivinject.git
           mkdir -p "$HOME/.ivinject"
           cp -R ./ivinject/KnownFrameworks/. "$HOME/.ivinject/"
-          curl -fL --retry 3 \
+          curl --fail --location --show-error --retry 3 \
             https://github.com/whoeevee/ivinject/releases/download/first/ivinject-arm64 \
             -o ivinject-arm64
-          sudo mv ivinject-arm64 /usr/local/bin/
+          sudo mv ivinject-arm64 /usr/local/bin/ivinject-arm64
           sudo chmod +x /usr/local/bin/ivinject-arm64
 
-      - name: Setup ipapatch
+      - name: Set up ipapatch
+        shell: bash
         run: |
           set -euo pipefail
-          curl -fL --retry 3 \
+          curl --fail --location --show-error --retry 3 \
             https://github.com/asdfzxcvbn/ipapatch/releases/download/v2.1.0/ipapatch.macos-arm64 \
             -o ipapatch.macos-arm64
           sudo mv ipapatch.macos-arm64 /usr/local/bin/ipapatch
           sudo chmod +x /usr/local/bin/ipapatch
 
       - name: Create EeveeSpotify Package
+        shell: bash
         run: |
           set -euo pipefail
           ivinject-arm64 "$GITHUB_WORKSPACE/spotify.ipa" "$GITHUB_WORKSPACE/EeveeSpotify.ipa" \
             -i "$GITHUB_WORKSPACE/eeveespotify.deb" "$SWIFTPROTOBUF_ROOTFUL" "$OPENSPOTIFYSAFARIEXTENSION" \
             -s - -d --level Optimal
 
+          if [[ ! -s "$GITHUB_WORKSPACE/EeveeSpotify.ipa" ]]; then
+            echo "::error::ivinject did not produce EeveeSpotify.ipa."
+            exit 1
+          fi
+
       - name: Create Patched Package
+        shell: bash
         run: |
           set -euo pipefail
           ipapatch -input "$GITHUB_WORKSPACE/EeveeSpotify.ipa" -output "$GITHUB_WORKSPACE/EeveeSpotify-patched.ipa"
+
+          if [[ ! -s "$GITHUB_WORKSPACE/EeveeSpotify-patched.ipa" ]]; then
+            echo "::error::ipapatch did not produce EeveeSpotify-patched.ipa."
+            exit 1
+          fi
 
       - name: Upload to GitHub Releases
         uses: softprops/action-gh-release@v2.0.1
@@ -209,7 +199,14 @@ jobs:
             EeveeSpotify.ipa
             EeveeSpotify-patched.ipa
           draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Output Release URL
+        shell: bash
         run: |
-          echo "::notice::Release available at: https://github.com/${{ github.repository }}/releases"
+          echo "::notice::Draft release page: https://github.com/${GITHUB_REPOSITORY}/releases"
+'''
+path = Path("/mnt/data/create-ipa-packages.yml")
+path.write_text(content, encoding="utf-8")
+print(f"Created {path} ({path.stat().st_size} bytes)")
