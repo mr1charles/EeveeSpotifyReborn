@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       ipa_url:
-        description: "URL to the decrypted IPA file"
+        description: "URL to the decrypted IPA file (direct link or Google Drive share link)"
         default: ""
         required: true
         type: string
       tweak_url:
-        description: "URL to the EeveeSpotify tweak file"
+        description: "URL to the EeveeSpotify tweak file (direct link or Google Drive share link)"
         default: ""
         required: true
         type: string
@@ -33,9 +33,16 @@ jobs:
       - name: Hide Sensitive Inputs
         uses: levibostian/action-hide-sensitive-inputs@v1
 
+      - name: Install gdown
+        run: pip3 install --break-system-packages gdown
+
       - name: Download and Validate IPA
         run: |
-          wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/spotify.ipa
+          if [[ "${{ inputs.ipa_url }}" == *drive.google.com* ]]; then
+            gdown --fuzzy "${{ inputs.ipa_url }}" -O ${{ github.workspace }}/spotify.ipa
+          else
+            wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/spotify.ipa
+          fi
           file_type=$(file --mime-type -b ${{ github.workspace }}/spotify.ipa)
           if [[ "$file_type" != "application/x-ios-app" && "$file_type" != "application/zip" ]]; then
             echo "::error::Validation failed: The downloaded file is not a valid IPA. Detected type: $file_type."
@@ -44,7 +51,11 @@ jobs:
 
       - name: Download and Validate Tweak
         run: |
-          wget "${{ inputs.tweak_url }}" --no-verbose -O ${{ github.workspace }}/eeveespotify.deb
+          if [[ "${{ inputs.tweak_url }}" == *drive.google.com* ]]; then
+            gdown --fuzzy "${{ inputs.tweak_url }}" -O ${{ github.workspace }}/eeveespotify.deb
+          else
+            wget "${{ inputs.tweak_url }}" --no-verbose -O ${{ github.workspace }}/eeveespotify.deb
+          fi
           file_type=$(file --mime-type -b ${{ github.workspace }}/eeveespotify.deb)
           if [[ "$file_type" != "application/vnd.debian.binary-package" ]]; then
             echo "::error::Validation failed: The file is not a valid DEB file. Detected type: $file_type."
