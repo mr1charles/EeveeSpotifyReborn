@@ -39,7 +39,8 @@ jobs:
       - name: Download and Validate IPA
         run: |
           if [[ "${{ inputs.ipa_url }}" == *drive.google.com* ]]; then
-            gdown --fuzzy "${{ inputs.ipa_url }}" -O ${{ github.workspace }}/spotify.ipa
+            file_id=$(echo "${{ inputs.ipa_url }}" | sed -E 's#.*/d/([^/?]+).*#\1#; t; s#.*[?&]id=([^&]+).*#\1#')
+            gdown "$file_id" -O ${{ github.workspace }}/spotify.ipa
           else
             wget "${{ inputs.ipa_url }}" --no-verbose -O ${{ github.workspace }}/spotify.ipa
           fi
@@ -52,7 +53,8 @@ jobs:
       - name: Download and Validate Tweak
         run: |
           if [[ "${{ inputs.tweak_url }}" == *drive.google.com* ]]; then
-            gdown --fuzzy "${{ inputs.tweak_url }}" -O ${{ github.workspace }}/eeveespotify.deb
+            file_id=$(echo "${{ inputs.tweak_url }}" | sed -E 's#.*/d/([^/?]+).*#\1#; t; s#.*[?&]id=([^&]+).*#\1#')
+            gdown "$file_id" -O ${{ github.workspace }}/eeveespotify.deb
           else
             wget "${{ inputs.tweak_url }}" --no-verbose -O ${{ github.workspace }}/eeveespotify.deb
           fi
