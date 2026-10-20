@@ -1,6 +1,4 @@
-from pathlib import Path
-
-content = r'''name: Create IPA Packages
+name: Create IPA Packages
 
 on:
   workflow_dispatch:
@@ -206,7 +204,3 @@ jobs:
         shell: bash
         run: |
           echo "::notice::Draft release page: https://github.com/${GITHUB_REPOSITORY}/releases"
-'''
-path = Path("/mnt/data/create-ipa-packages.yml")
-path.write_text(content, encoding="utf-8")
-print(f"Created {path} ({path.stat().st_size} bytes)")
