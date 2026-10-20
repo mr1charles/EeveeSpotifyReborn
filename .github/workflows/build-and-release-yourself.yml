@@ -46,8 +46,14 @@ jobs:
           set -euo pipefail
           OUTPUT="$GITHUB_WORKSPACE/spotify.ipa"
 
-          if [[ "$IPA_URL" == *drive.google.com* ]]; then
-            gdown --fuzzy "$IPA_URL" -O "$OUTPUT"
+          if [[ "$IPA_URL" == *google.com* ]]; then
+            # Handles drive.google.com, docs.google.com and drive.usercontent.google.com links.
+            FILE_ID="$(printf '%s' "$IPA_URL" | sed -nE 's#.*/d/([A-Za-z0-9_-]+).*#\1#p; s#.*[?&]id=([A-Za-z0-9_-]+).*#\1#p' | head -n1)"
+            if [[ -z "$FILE_ID" ]]; then
+              echo "::error::Could not find a Google Drive file ID in the URL."
+              exit 1
+            fi
+            gdown "https://drive.google.com/uc?id=$FILE_ID" -O "$OUTPUT"
           else
             curl --fail --location --show-error --retry 3 "$IPA_URL" -o "$OUTPUT"
           fi
@@ -85,8 +91,14 @@ jobs:
           set -euo pipefail
           OUTPUT="$GITHUB_WORKSPACE/eeveespotify.deb"
 
-          if [[ "$TWEAK_URL" == *drive.google.com* ]]; then
-            gdown --fuzzy "$TWEAK_URL" -O "$OUTPUT"
+          if [[ "$TWEAK_URL" == *google.com* ]]; then
+            # Handles drive.google.com, docs.google.com and drive.usercontent.google.com links.
+            FILE_ID="$(printf '%s' "$TWEAK_URL" | sed -nE 's#.*/d/([A-Za-z0-9_-]+).*#\1#p; s#.*[?&]id=([A-Za-z0-9_-]+).*#\1#p' | head -n1)"
+            if [[ -z "$FILE_ID" ]]; then
+              echo "::error::Could not find a Google Drive file ID in the URL."
+              exit 1
+            fi
+            gdown "https://drive.google.com/uc?id=$FILE_ID" -O "$OUTPUT"
           else
             curl --fail --location --show-error --retry 3 "$TWEAK_URL" -o "$OUTPUT"
           fi
